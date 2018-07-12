@@ -34,10 +34,29 @@ func (c *CasesDB) PutRecord(dispute *repo.DisputeCaseRecord) error {
 	if err != nil {
 		return err
 	}
-	stm := `insert or replace into cases(caseID, state, read, timestamp, buyerOpened, claim, buyerPayoutAddress, vendorPayoutAddress) values(?,?,?,?,?,?,?,?)`
+	stm := `insert or replace into cases(caseID, state, read, timestamp, buyerOpened, claim, buyerPayoutAddress, vendorPayoutAddress, paymentCoin, coinType) values(?,?,?,?,?,?,?,?,?,?)`
 	stmt, err := tx.Prepare(stm)
 	if err != nil {
 		return err
+	}
+
+	contract := dispute.BuyerContract
+	if contract == nil {
+		contract = dispute.VendorContract
+	}
+
+	coinType := ""
+	paymentCoin := ""
+	if contract != nil {
+		paymentCoin = contract.BuyerOrder.Payment.Coin
+
+		if len(contract.VendorListings) > 0 {
+			coinType = contract.VendorListings[0].Metadata.CoinType
+
+			if paymentCoin == "" && len(contract.VendorListings[0].Metadata.AcceptedCurrencies) > 0 {
+				paymentCoin = contract.VendorListings[0].Metadata.AcceptedCurrencies[0]
+			}
+		}
 	}
 
 	defer stmt.Close()
@@ -50,6 +69,8 @@ func (c *CasesDB) PutRecord(dispute *repo.DisputeCaseRecord) error {
 		dispute.Claim,
 		"",
 		"",
+		paymentCoin,
+		coinType,
 	)
 	if err != nil {
 		rErr := tx.Rollback()
@@ -207,7 +228,7 @@ func (c *CasesDB) GetAll(stateFilter []pb.OrderState, searchTerm string, sortByA
 
 	q := query{
 		table:           "cases",
-		columns:         []string{"caseID", "timestamp", "buyerContract", "vendorContract", "buyerOpened", "state", "read"},
+		columns:         []string{"caseID", "timestamp", "buyerContract", "vendorContract", "buyerOpened", "state", "read", "coinType", "paymentCoin"},
 		stateFilter:     stateFilter,
 		searchTerm:      searchTerm,
 		searchColumns:   []string{"caseID", "timestamp", "claim"},
@@ -225,10 +246,10 @@ func (c *CasesDB) GetAll(stateFilter []pb.OrderState, searchTerm string, sortByA
 	defer rows.Close()
 	var ret []repo.Case
 	for rows.Next() {
-		var caseID string
+		var caseID, coinType, paymentCoin string
 		var buyerContract, vendorContract []byte
 		var timestamp, buyerOpenedInt, stateInt, readInt int
-		if err := rows.Scan(&caseID, &timestamp, &buyerContract, &vendorContract, &buyerOpenedInt, &stateInt, &readInt); err != nil {
+		if err := rows.Scan(&caseID, &timestamp, &buyerContract, &vendorContract, &buyerOpenedInt, &stateInt, &readInt, &coinType, &paymentCoin); err != nil {
 			return ret, 0, err
 		}
 		read := false
@@ -287,6 +308,8 @@ func (c *CasesDB) GetAll(stateFilter []pb.OrderState, searchTerm string, sortByA
 			BuyerId:      buyerId,
 			BuyerHandle:  buyerHandle,
 			BuyerOpened:  buyerOpened,
+			CoinType:     coinType,
+			PaymentCoin:  paymentCoin,
 			State:        pb.OrderState(stateInt).String(),
 			Read:         read,
 		})

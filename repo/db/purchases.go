@@ -42,7 +42,7 @@ func (p *PurchasesDB) Put(orderID string, contract pb.RicardianContract, state p
 	if err != nil {
 		return err
 	}
-	stm := `insert or replace into purchases(orderID, contract, state, read, timestamp, total, thumbnail, vendorID, vendorHandle, title, shippingName, shippingAddress, paymentAddr, funded, transactions) values(?,?,?,?,?,?,?,?,?,?,?,?,?,(select funded from purchases where orderID="` + orderID + `"),(select transactions from purchases where orderID="` + orderID + `"))`
+	stm := `insert or replace into purchases(orderID, contract, state, read, timestamp, total, thumbnail, vendorID, vendorHandle, title, shippingName, shippingAddress, paymentAddr, paymentCoin, coinType, funded, transactions) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,(select funded from purchases where orderID="` + orderID + `"),(select transactions from purchases where orderID="` + orderID + `"))`
 	stmt, err := tx.Prepare(stm)
 	if err != nil {
 		return err
@@ -60,6 +60,12 @@ func (p *PurchasesDB) Put(orderID string, contract pb.RicardianContract, state p
 	} else if contract.BuyerOrder.Payment.Method == pb.Order_Payment_ADDRESS_REQUEST {
 		paymentAddr = contract.VendorOrderConfirmation.PaymentAddress
 	}
+
+	paymentCoin := contract.BuyerOrder.Payment.Coin
+	if paymentCoin == "" && len(contract.VendorListings[0].Metadata.AcceptedCurrencies) > 0 {
+		paymentCoin = contract.VendorListings[0].Metadata.AcceptedCurrencies[0]
+	}
+
 	defer stmt.Close()
 	_, err = stmt.Exec(
 		orderID,
@@ -75,6 +81,8 @@ func (p *PurchasesDB) Put(orderID string, contract pb.RicardianContract, state p
 		shippingName,
 		shippingAddress,
 		paymentAddr,
+		paymentCoin,
+		contract.VendorListings[0].Metadata.CoinType,
 	)
 	if err != nil {
 		tx.Rollback()
@@ -138,7 +146,7 @@ func (p *PurchasesDB) GetAll(stateFilter []pb.OrderState, searchTerm string, sor
 
 	q := query{
 		table:           "purchases",
-		columns:         []string{"orderID", "contract", "timestamp", "total", "title", "thumbnail", "vendorID", "vendorHandle", "shippingName", "shippingAddress", "state", "read"},
+		columns:         []string{"orderID", "contract", "timestamp", "total", "title", "thumbnail", "vendorID", "vendorHandle", "shippingName", "shippingAddress", "state", "read", "coinType", "paymentCoin"},
 		stateFilter:     stateFilter,
 		searchTerm:      searchTerm,
 		searchColumns:   []string{"orderID", "timestamp", "total", "title", "thumbnail", "vendorID", "vendorHandle", "shippingName", "shippingAddress", "paymentAddr"},
@@ -156,10 +164,10 @@ func (p *PurchasesDB) GetAll(stateFilter []pb.OrderState, searchTerm string, sor
 	defer rows.Close()
 	var ret []repo.Purchase
 	for rows.Next() {
-		var orderID, title, thumbnail, vendorID, vendorHandle, shippingName, shippingAddr string
+		var orderID, title, thumbnail, vendorID, vendorHandle, shippingName, shippingAddr, coinType, paymentCoin string
 		var contract []byte
 		var timestamp, total, stateInt, readInt int
-		if err := rows.Scan(&orderID, &contract, &timestamp, &total, &title, &thumbnail, &vendorID, &vendorHandle, &shippingName, &shippingAddr, &stateInt, &readInt); err != nil {
+		if err := rows.Scan(&orderID, &contract, &timestamp, &total, &title, &thumbnail, &vendorID, &vendorHandle, &shippingName, &shippingAddr, &stateInt, &readInt, &coinType, &paymentCoin); err != nil {
 			return ret, 0, err
 		}
 		read := false
@@ -191,6 +199,8 @@ func (p *PurchasesDB) GetAll(stateFilter []pb.OrderState, searchTerm string, sor
 			VendorHandle:    vendorHandle,
 			ShippingName:    shippingName,
 			ShippingAddress: shippingAddr,
+			CoinType:        coinType,
+			PaymentCoin:     paymentCoin,
 			State:           pb.OrderState(stateInt).String(),
 			Moderated:       moderated,
 			Read:            read,
